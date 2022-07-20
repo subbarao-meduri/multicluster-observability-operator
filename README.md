@@ -190,3 +190,5 @@ Rebuild Image: Mon Jun 27 10:14:44 EDT 2022
 
 
 Rebuild: 2022-07-05
+
+Generated auto rebuild. View log file created: [update-log-07-20-22](https://github.com/stolostron/multicluster-observability-operator/blob/main/.github/logs/update-log-07-20-22.md)
