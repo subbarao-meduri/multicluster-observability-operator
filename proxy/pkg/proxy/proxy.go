@@ -63,9 +63,9 @@ func formatRequest(r *http.Request) string {
 
 // HandleRequestAndRedirect is used to init proxy handler
 func HandleRequestAndRedirect(res http.ResponseWriter, req *http.Request) {
-	klog.Infof("--------- Request Headers begin -------")
+	klog.Infof("\n\n\n--------- Request Headers begin -------")
 	klog.Infof(formatRequest(req))
-	klog.Infof("--------- Request Headers end ---------")
+	klog.Infof("--------- Request Headers end ---------\n\n\n")
 	if preCheckRequest(req) != nil {
 		klog.Infof("Writing a newEmptyMatrixHTTPBody")
 		_, err := res.Write(newEmptyMatrixHTTPBody())
