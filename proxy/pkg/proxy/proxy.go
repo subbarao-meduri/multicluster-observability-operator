@@ -88,6 +88,8 @@ func preCheckRequest(req *http.Request) error {
 			klog.Infof("Treating Authorization header value as X-Forwarded-Access-Token, setting it to %s", token)
 			req.Header.Set("X-Forwarded-Access-Token", token)
 		}
+	} else {
+		klog.Infof("received X-Forwarded-Access-Token=%s", token)
 	}
 
 	userName := req.Header.Get("X-Forwarded-User")
@@ -100,6 +102,8 @@ func preCheckRequest(req *http.Request) error {
 			klog.Infof("Setting User %s as X-Forwarded-User", userName)
 			req.Header.Set("X-Forwarded-User", userName)
 		}
+	} else {
+		klog.Infof("received userName=%s", userName)
 	}
 
 	projectList, ok := util.GetUserProjectList(token)
