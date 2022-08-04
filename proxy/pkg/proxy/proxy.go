@@ -52,11 +52,11 @@ func formatRequest(r *http.Request) string {
 	}
 
 	// If this is a POST, add post data
-	if r.Method == "POST" {
-		r.ParseForm()
-		request = append(request, "\n")
-		request = append(request, r.Form.Encode())
-	}
+	// if r.Method == "POST" {
+	// 	r.ParseForm()
+	// 	request = append(request, "\n")
+	// 	request = append(request, r.Form.Encode())
+	// }
 	// Return the request as a string
 	return strings.Join(request, "\n")
 }
