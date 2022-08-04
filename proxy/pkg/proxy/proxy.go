@@ -85,7 +85,7 @@ func preCheckRequest(req *http.Request) error {
 			klog.Infof("found unauthorized user")
 			return errors.New("found unauthorized user")
 		} else {
-			klog.Infof("Treating Authorization header value as X-Forwarded-Access-Token")
+			klog.Infof("Treating Authorization header value as X-Forwarded-Access-Token, setting it to %s", token)
 			req.Header.Set("X-Forwarded-Access-Token", token)
 		}
 	}
