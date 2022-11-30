@@ -255,6 +255,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	mgr.GetWebhookServer().TLSMinVersion = "1.2"
+
 	if err = operatorsutil.UpdateCRDWebhookNS(crdClient, mcoNamespace, config.MCOCrdName); err != nil {
 		setupLog.Error(
 			err,
