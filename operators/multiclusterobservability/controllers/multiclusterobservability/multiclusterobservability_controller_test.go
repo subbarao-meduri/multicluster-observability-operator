@@ -363,6 +363,10 @@ func TestMultiClusterMonitoringCRUpdate(t *testing.T) {
 		t.Errorf("Failed to get correct MCO status, expect Failed")
 	}
 
+	if _, ok := updatedMCO.ObjectMeta.Labels[config.BackupLabelClusterActivation]; !ok {
+		t.Errorf("Failed to set BackupLabelClusterActivation label")
+	}
+
 	amRoute := &routev1.Route{}
 	err = cl.Get(context.TODO(), types.NamespacedName{
 		Name:      config.AlertmanagerRouteName,

@@ -175,6 +175,20 @@ func (r *MultiClusterObservabilityReconciler) Reconcile(ctx context.Context, req
 		return ctrl.Result{}, nil
 	}
 
+	if _, ok := instance.ObjectMeta.Labels[config.BackupLabelName]; !ok {
+		if instance.ObjectMeta.Labels == nil {
+			instance.ObjectMeta.Labels = make(map[string]string)
+		}
+
+		instance.ObjectMeta.Labels[config.BackupLabelName] = config.BackupLabelClusterActivation
+		err = r.Client.Update(context.TODO(), instance)
+		if err != nil {
+			return ctrl.Result{}, err
+		} else {
+			log.Info("Add cluster-activation backup label for custom resource", "name", instance.ObjectMeta.Name)
+		}
+	}
+
 	if _, ok := config.BackupResourceMap[instance.Spec.StorageConfig.MetricObjectStorage.Name]; !ok {
 		log.Info(infoAddingBackupLabel, "Secret", instance.Spec.StorageConfig.MetricObjectStorage.Name)
 		config.BackupResourceMap[instance.Spec.StorageConfig.MetricObjectStorage.Name] = config.ResourceTypeSecret
