@@ -8,8 +8,8 @@ set -eo pipefail
 
 WORKDIR="$(cd "$(dirname "$0")" ; pwd -P)"
 # Create bin directory and add it to PATH
-mkdir -p ${ROOTDIR}/bin
-export PATH={ROOTDIR}/bin:${PATH}
+mkdir -p ${WORKDIR}/bin
+export PATH={WORKDIR}/bin:${PATH}
 
 # tmp output directory for metrics list
 TMP_OUT=$(mktemp -d /tmp/metrics.XXXXXXXXXX)
@@ -51,12 +51,12 @@ if ! command -v jq &> /dev/null; then
 		curl -o jq -L https://github.com/stedolan/jq/releases/download/jq-1.6/jq-osx-amd64
 	fi
 	chmod +x ./jq
-	chmod +x ./jq && mv ./jq ${WORK_DIR}/bin/jq
+	chmod +x ./jq && mv ./jq ${WORKDIR}/bin/jq
 fi
 
 # install gojsontoyaml
-GOBIN=${WORK_DIR}/bin go install github.com/brancz/gojsontoyaml
-GOJSONTOYAML_BIN=${WORK_DIR}/bin/gojsontoyaml
+GOBIN=${WORKDIR}/bin go get github.com/brancz/gojsontoyaml
+GOJSONTOYAML_BIN=${WORKDIR}/bin/gojsontoyaml
 
 function get_metrics_list() {
 	echo "getting metrics list..."
