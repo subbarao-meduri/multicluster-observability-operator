@@ -26,6 +26,7 @@ import (
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -95,9 +96,15 @@ func deleteManifestWorks(c client.Client, namespace string) error {
 }
 
 func injectIntoWork(works []workv1.Manifest, obj runtime.Object) []workv1.Manifest {
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		log.Error(err, "failed to marshall object", "obj", obj)
+		return works
+	}
 	works = append(works,
 		workv1.Manifest{
 			RawExtension: runtime.RawExtension{
+				Raw:    raw,
 				Object: obj,
 			},
 		})
@@ -191,13 +198,36 @@ func createManifestwork(c client.Client, work *workv1.ManifestWork) error {
 	return nil
 }
 
+func printManifests(s string, manifests []workv1.Manifest) {
+	log.Info("======= "+s+" ======", "length", len(manifests))
+	for i, m := range manifests {
+		if len(m.Raw) == 0 {
+			log.Info("Raw manifest is empty", "index", i)
+		}
+		obj := &unstructured.Unstructured{}
+		err := obj.UnmarshalJSON(m.Raw)
+		if err != nil {
+			log.Info("Error unmarshalling manifest", "index", i, "error", err)
+		} else {
+			log.Info("----> ", "index", i, "obj", obj)
+		}
+	}
+}
+
 func shouldUpdateManifestWork(desiredManifests []workv1.Manifest, foundManifests []workv1.Manifest) bool {
 	if len(desiredManifests) != len(foundManifests) {
+		log.Info("manifestwork manifests lengths do not match", "desired", len(desiredManifests), "found", len(foundManifests))
 		return true
 	}
 
-	for i, m := range desiredManifests {
-		if !util.CompareObject(m.RawExtension, foundManifests[i].RawExtension) {
+	printManifests("desired", desiredManifests)
+	printManifests("found", foundManifests)
+	for i, m := range foundManifests {
+		log.Info("comparing objects")
+		if !util.CompareObject(m.RawExtension, desiredManifests[i].RawExtension) {
+			log.Info("Objects did not match", "index", i)
+			log.Info("found", "m", m)
+			log.Info("desired", "desiredManifests[i]", desiredManifests[i])
 			return true
 		}
 	}
@@ -289,6 +319,8 @@ func createManifestWorks(
 	work := newManifestwork(clusterNamespace+workNameSuffix, clusterNamespace)
 
 	manifests := work.Spec.Workload.Manifests
+	log.Info("Initial manifests", "manifests", manifests)
+
 	// inject observabilityAddon
 	obaddon, err := getObservabilityAddon(c, clusterNamespace, mco)
 	if err != nil {
@@ -296,13 +328,19 @@ func createManifestWorks(
 	}
 	if obaddon != nil {
 		manifests = injectIntoWork(manifests, obaddon)
+		printManifests("Manifests after injecting observabilityAddon", manifests)
 	}
 
-	manifests = append(manifests, works...)
+	//manifests = append(manifests, works...)
+	for _, w := range works {
+		manifests = injectIntoWork(manifests, w.Object)
+	}
 	manifests = injectIntoWork(manifests, allowlist)
+	printManifests("Manifests after injecting allowlist", manifests)
 
 	if clusterName != localClusterName {
-		manifests = append(manifests, *crdWork)
+		manifests = injectIntoWork(manifests, (*crdWork).Object)
+		printManifests("Manifests after appending crdWork", manifests)
 	}
 
 	// replace the managedcluster image with the custom registry
@@ -394,6 +432,7 @@ func createManifestWorks(
 	log.Info(fmt.Sprintf("Cluster: %+v, Spec.NodeSelector (after): %+v", clusterName, spec.NodeSelector))
 	log.Info(fmt.Sprintf("Cluster: %+v, Spec.Tolerations (after): %+v", clusterName, spec.Tolerations))
 
+	log.Info("Before checking clusterName, clusterNamespcae", "clusterName", clusterName, "clusterNameSpace", clusterNamespace)
 	if clusterName != clusterNamespace {
 		spec.Volumes = []corev1.Volume{}
 		spec.Containers[0].VolumeMounts = []corev1.VolumeMount{}
@@ -404,6 +443,7 @@ func createManifestWorks(
 			}
 		}
 		// Set HUB_ENDPOINT_OPERATOR when the endpoint operator is installed in hub cluster
+		log.Info("Setting HUB_ENDPOINT_OPERATOR true", "clusterName", clusterName, "clusterNameSpace", clusterNamespace)
 		spec.Containers[0].Env = append(spec.Containers[0].Env, corev1.EnvVar{
 			Name:  "HUB_ENDPOINT_OPERATOR",
 			Value: "true",
@@ -414,6 +454,8 @@ func createManifestWorks(
 
 	dep.Spec.Template.Spec = spec
 	manifests = injectIntoWork(manifests, dep)
+	printManifests("Manifests after injecting deployment", manifests)
+
 	// replace the pull secret and addon components image
 	if hasCustomRegistry {
 		log.Info("Replace the default pull secret to custom pull secret", "cluster", clusterName)
@@ -450,6 +492,10 @@ func createManifestWorks(
 	manifests = injectIntoWork(manifests, hubInfo)
 
 	work.Spec.Workload.Manifests = manifests
+	log.Info("Final manifests before assignment to work", "manifests", manifests)
+	printManifests("Final manifests before assignment to work", manifests)
+	log.Info("Final manifests after assignment to work", "work.Spec.Workload.Manifests", work.Spec.Workload.Manifests)
+	printManifests("Final manifests after assignment to work", work.Spec.Workload.Manifests)
 
 	if clusterName != clusterNamespace && os.Getenv("UNIT_TEST") != "true" {
 		// ACM 8509: Special case for hub/local cluster metrics collection
@@ -458,6 +504,7 @@ func createManifestWorks(
 		err = createUpdateResourcesForHubMetricsCollection(c, manifests)
 	} else {
 		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			printManifests("Before createManifsetWork() call(work)", work.Spec.Workload.Manifests)
 			return createManifestwork(c, work)
 		})
 		if retryErr != nil {

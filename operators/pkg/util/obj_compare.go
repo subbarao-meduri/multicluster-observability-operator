@@ -5,9 +5,11 @@
 package util
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 
+	"github.com/google/go-cmp/cmp"
 	prometheusv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -68,17 +70,41 @@ func GetK8sObjWithVersion(kind, version string) runtime.Object {
 	return objs[kind]
 }
 
+func printJSONDiff(raw1, raw2 []byte) {
+	var obj1, obj2 map[string]interface{}
+	if err := json.Unmarshal(raw1, &obj1); err != nil {
+		log.Info("Failed to unmarshal re1.Raw", "error", err)
+		return
+	}
+	if err := json.Unmarshal(raw2, &obj2); err != nil {
+		log.Info("Failed to unmarshal re2.Raw", "error", err)
+		return
+	}
+
+	diff := cmp.Diff(obj1, obj2)
+	log.Info("Diff", "diff", diff)
+}
+
 // CompareObject is used to compare two k8s objs are same or not
 func CompareObject(re1 runtime.RawExtension, re2 runtime.RawExtension) bool {
 	if re2.Object == nil {
-		return reflect.DeepEqual(re1.Raw, re2.Raw)
+		log.Info("re2.Object is nil")
+		log.Info("raw objects:", "re1.raw", re1.Raw, "re2.raw", re2.Raw)
+		ret := reflect.DeepEqual(re1.Raw, re2.Raw)
+		if !ret {
+			log.Info("re1.Raw and re2.Raw are different")
+			printJSONDiff(re1.Raw, re2.Raw)
+		}
+		return ret
 	}
 	obj1, err := GetObject(re1)
 	if err != nil {
+		log.Info("Failed to get obj1")
 		return false
 	}
 	obj2, err := GetObject(re2)
 	if err != nil {
+		log.Info("Failed to get obj2")
 		return false
 	}
 	kind1 := obj1.GetObjectKind().GroupVersionKind().Kind
@@ -93,7 +119,11 @@ func CompareObject(re1 runtime.RawExtension, re2 runtime.RawExtension) bool {
 	if kind1 == "CustomResourceDefinition" {
 		kind1 = kind1 + version1
 	}
-	return compFns[kind1](obj1, obj2)
+	ret := compFns[kind1](obj1, obj2)
+	if !ret {
+		log.Info("obj1 and obj2 are different")
+	}
+	return ret
 }
 
 func GetObject(re runtime.RawExtension) (runtime.Object, error) {
