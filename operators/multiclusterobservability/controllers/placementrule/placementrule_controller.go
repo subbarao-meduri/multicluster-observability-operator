@@ -151,8 +151,34 @@ func (r *PlacementRuleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
-	// Clean spokes addon resources (except the hub collector) if metrics are disabled.
+	// Ensure hub-info-secret is updated when alerting annotations change, regardless of metrics collection state.
 	metricsAreDisabled := mco.Spec.ObservabilityAddonSpec != nil && !mco.Spec.ObservabilityAddonSpec.EnableMetrics
+	if !mcoIsNotFound && metricsAreDisabled {
+		reqLogger.Info("Metrics disabled but MCO exists - ensuring hub alerting config is updated")
+
+		var err error
+		hubInfoSecret, err = generateHubInfoSecret(
+			r.Client,
+			config.GetDefaultNamespace(),
+			config.GetDefaultNamespace(),
+			r.CRDMap,
+			config.IsUWMAlertingDisabledInSpec(mco))
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to generate hub info secret: %w", err)
+		}
+
+		wantSecret := hubInfoSecret.DeepCopy()
+		_, err = ctrl.CreateOrUpdate(ctx, r.Client, hubInfoSecret, func() error {
+			hubInfoSecret.Data = wantSecret.Data
+			return nil
+		})
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to create or update hub-info-secret: %w", err)
+		}
+		reqLogger.Info("Updated hub-info-secret", "alertingDisabled", config.IsAlertingDisabledInSpec(mco))
+	}
+
+	// Clean spokes addon resources (except the hub collector) if metrics are disabled.
 	if mcoIsNotFound || metricsAreDisabled || mcoaForMetricsIsEnabled(mco) {
 		reqLogger.Info("Cleaning all spokes resources", "mcoIsNotFound", mcoIsNotFound, "metricsAreDisabled",
 			metricsAreDisabled, "mcoaIsEnabled", mcoaForMetricsIsEnabled(mco))

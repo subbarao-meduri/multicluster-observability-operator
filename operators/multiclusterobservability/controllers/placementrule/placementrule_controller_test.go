@@ -526,6 +526,113 @@ func TestObservabilityAddonController(t *testing.T) {
 		t.Fatalf("Secret %s not found in ManifestWork", operatorconfig.HubInfoSecretName)
 	}
 
+	// 4. Test the bug fix: mco-disable-alerting with enableMetrics=false
+	// This tests the scenario where metrics collection is disabled but alerting should still be disabled
+	t.Logf("Testing mco-disable-alerting annotation with enableMetrics=false")
+
+	// Set enableMetrics to false (customer scenario)
+	mco.Spec.ObservabilityAddonSpec.EnableMetrics = false
+	// Re-add the alerting annotation
+	mco.Annotations = map[string]string{config.AnnotationDisableMCOAlerting: "true"}
+	err = c.Update(context.TODO(), mco)
+	if err != nil {
+		t.Fatalf("Failed to update mco with enableMetrics=false: (%v)", err)
+	}
+	config.SetAlertingDisabled(true)
+	hubInfoSecret = nil
+
+	_, err = r.Reconcile(context.TODO(), req)
+	if err != nil {
+		t.Fatalf("reconcile error with enableMetrics=false and mco-disable-alerting=true: (%v)", err)
+	}
+
+	// Verify 1: Check the in-memory global hubInfoSecret has empty AlertmanagerEndpoint
+	// This is what RevertHubClusterMonitoringConfig reads when cleaning up
+	if hubInfoSecret == nil {
+		t.Fatalf("hubInfoSecret should have been regenerated but is still nil")
+	}
+
+	hubInfoData := operatorconfig.HubInfo{}
+	err = yaml.Unmarshal(hubInfoSecret.Data[operatorconfig.HubInfoSecretKey], &hubInfoData)
+	if err != nil {
+		t.Fatalf("Failed to parse in-memory hubInfoSecret: (%v)", err)
+	}
+
+	if hubInfoData.AlertmanagerEndpoint != "" {
+		t.Fatalf("hubInfoSecret AlertmanagerEndpoint should be empty with enableMetrics=false and mco-disable-alerting=true, got: %s",
+			hubInfoData.AlertmanagerEndpoint)
+	}
+
+	// Verify 2: Check that hub-info-secret was deleted as part of cleanup (when enableMetrics=false)
+	hubSecret := &corev1.Secret{}
+	err = c.Get(context.TODO(), types.NamespacedName{
+		Name:      operatorconfig.HubInfoSecretName,
+		Namespace: config.GetDefaultNamespace(),
+	}, hubSecret)
+	if err == nil {
+		t.Fatalf("hub-info-secret should have been deleted as part of cleanup when enableMetrics=false")
+	}
+	if !errors.IsNotFound(err) {
+		t.Fatalf("Unexpected error checking hub-info-secret: (%v)", err)
+	}
+
+	// Verify 3: Check that cluster-monitoring-config was reverted
+	cmoConfig := &corev1.ConfigMap{}
+	err = c.Get(context.TODO(), types.NamespacedName{
+		Name:      "cluster-monitoring-config",
+		Namespace: "openshift-monitoring",
+	}, cmoConfig)
+	// ConfigMap might not exist (was deleted) or exist without alert forwarding - both are valid
+	if err == nil {
+		// If it exists, verify no ACM alert forwarding configuration
+		configYaml, hasConfig := cmoConfig.Data["config.yaml"]
+		if hasConfig && strings.Contains(configYaml, "observability-alertmanager-accessor") {
+			t.Fatalf("cluster-monitoring-config should not contain ACM alert forwarding configuration")
+		}
+	} else if !errors.IsNotFound(err) {
+		t.Fatalf("Unexpected error checking cluster-monitoring-config: (%v)", err)
+	} else {
+		t.Logf("SUCCESS: cluster-monitoring-config was deleted (acceptable)")
+	}
+
+	// 5. Re-enable metrics and verify alert forwarding stays disabled
+	t.Logf("Re-enabling metrics while keeping mco-disable-alerting=true")
+
+	// Get fresh MCO to avoid stale data
+	err = c.Get(context.TODO(), types.NamespacedName{Name: mcoName}, mco)
+	if err != nil {
+		t.Fatalf("Failed to get MCO: (%v)", err)
+	}
+
+	mco.Spec.ObservabilityAddonSpec.EnableMetrics = true
+	err = c.Update(context.TODO(), mco)
+	if err != nil {
+		t.Fatalf("Failed to update mco to re-enable metrics: (%v)", err)
+	}
+	config.SetAlertingDisabled(true) // annotation is still set
+	hubInfoSecret = nil
+
+	_, err = r.Reconcile(context.TODO(), req)
+	if err != nil {
+		t.Fatalf("reconcile error after re-enabling metrics: (%v)", err)
+	}
+
+	// When metrics are re-enabled, the normal flow creates resources including hub-info-secret.
+	// Check the in-memory hubInfoSecret first
+	if hubInfoSecret == nil {
+		t.Fatalf("hubInfoSecret should have been regenerated after re-enabling metrics")
+	}
+
+	err = yaml.Unmarshal(hubInfoSecret.Data[operatorconfig.HubInfoSecretKey], &hubInfoData)
+	if err != nil {
+		t.Fatalf("Failed to parse in-memory hubInfoSecret after re-enabling metrics: (%v)", err)
+	}
+
+	if hubInfoData.AlertmanagerEndpoint != "" {
+		t.Fatalf("AlertmanagerEndpoint should remain empty after re-enabling metrics with annotation still set, got: %s",
+			hubInfoData.AlertmanagerEndpoint)
+	}
+
 	testMCHInstance := newMCHInstanceWithVersion(config.GetMCONamespace(), version)
 	err = c.Create(context.TODO(), testMCHInstance)
 	if err != nil {
