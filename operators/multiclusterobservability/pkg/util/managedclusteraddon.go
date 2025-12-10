@@ -129,12 +129,18 @@ func needsConfigReferencesInitialization(ctx context.Context, c client.Client, m
 			// ConfigReferences entry exists - check if ConfigReferent matches CMA's defaultConfig
 			if configRef.DesiredConfig == nil {
 				// DesiredConfig is nil, needs initialization
+				log.Info("MCA ConfigReferences DesiredConfig is nil, needs initialization",
+					"name", mca.Name, "namespace", mca.Namespace)
 				return true, nil
 			}
 			// Check if ConfigReferent matches
 			if configRef.DesiredConfig.ConfigReferent.Name != cmaDefaultConfig.Name ||
 				configRef.DesiredConfig.ConfigReferent.Namespace != cmaDefaultConfig.Namespace {
 				// ConfigReferent doesn't match CMA's defaultConfig - needs update
+				log.Info("MCA ConfigReferences ConfigReferent doesn't match CMA defaultConfig, needs update",
+					"name", mca.Name, "namespace", mca.Namespace,
+					"currentConfigReferent", configRef.DesiredConfig.ConfigReferent.Name+"/"+configRef.DesiredConfig.ConfigReferent.Namespace,
+					"cmaDefaultConfig", cmaDefaultConfig.Name+"/"+cmaDefaultConfig.Namespace)
 				return true, nil
 			}
 			// ConfigReferent matches - no update needed
@@ -143,6 +149,8 @@ func needsConfigReferencesInitialization(ctx context.Context, c client.Client, m
 	}
 
 	// No ConfigReferences entry exists - needs initialization
+	log.Info("MCA has no ConfigReferences entry for AddonDeploymentConfig, needs initialization",
+		"name", mca.Name, "namespace", mca.Namespace)
 	return true, nil
 }
 
@@ -172,7 +180,9 @@ func createManagedClusterAddOn(ctx context.Context, c client.Client, namespace, 
 
 func updateManagedClusterAddOnStatus(ctx context.Context, c client.Client, namespace string) (*addonv1alpha1.ManagedClusterAddOn, error) {
 	existingManagedClusterAddon := &addonv1alpha1.ManagedClusterAddOn{}
+	retryAttempt := 0
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		retryAttempt++
 		objectKey := types.NamespacedName{
 			Name:      config.ManagedClusterAddonName,
 			Namespace: namespace,
@@ -182,6 +192,24 @@ func updateManagedClusterAddOnStatus(ctx context.Context, c client.Client, names
 		}
 
 		desiredStatus := existingManagedClusterAddon.Status.DeepCopy()
+
+		// Log current state before modifications on retries
+		if retryAttempt > 1 {
+			var currentConfigRefInfo string
+			for _, ref := range desiredStatus.ConfigReferences {
+				if ref.ConfigGroupResource.Group == AddonGroup && ref.ConfigGroupResource.Resource == AddonDeploymentConfigResource {
+					if ref.DesiredConfig != nil {
+						currentConfigRefInfo = fmt.Sprintf("ConfigReferent=%s/%s, SpecHash=%s",
+							ref.DesiredConfig.ConfigReferent.Name, ref.DesiredConfig.ConfigReferent.Namespace, ref.DesiredConfig.SpecHash)
+					} else {
+						currentConfigRefInfo = "DesiredConfig=nil"
+					}
+					break
+				}
+			}
+			log.Info("Retry attempt for MCA status update", "namespace", namespace, "attempt", retryAttempt,
+				"configRefsCount", len(desiredStatus.ConfigReferences), "configRefInfo", currentConfigRefInfo)
+		}
 
 		// Ensure that the progressing condition exists. If not, add it as it may have just been created.
 		isAvailable := meta.IsStatusConditionTrue(desiredStatus.Conditions, availableConditionType)
@@ -266,15 +294,29 @@ func initializeConfigReferencesFromCMA(cma *addonv1alpha1.ClusterManagementAddOn
 				if mcaStatus.ConfigReferences[i].ConfigGroupResource.Group == AddonGroup &&
 					mcaStatus.ConfigReferences[i].ConfigGroupResource.Resource == AddonDeploymentConfigResource {
 					found = true
-					// Update ConfigReferent fields if they changed
-					mcaStatus.ConfigReferences[i].ConfigReferent.Name = supportedConfig.DefaultConfig.Name
-					mcaStatus.ConfigReferences[i].ConfigReferent.Namespace = supportedConfig.DefaultConfig.Namespace
+					// Update ConfigReferent fields only if they changed
+					if mcaStatus.ConfigReferences[i].ConfigReferent.Name != supportedConfig.DefaultConfig.Name ||
+						mcaStatus.ConfigReferences[i].ConfigReferent.Namespace != supportedConfig.DefaultConfig.Namespace {
+						log.Info("Updating top-level ConfigReferent",
+							"oldConfigReferent", mcaStatus.ConfigReferences[i].ConfigReferent.Name+"/"+mcaStatus.ConfigReferences[i].ConfigReferent.Namespace,
+							"newConfigReferent", supportedConfig.DefaultConfig.Name+"/"+supportedConfig.DefaultConfig.Namespace)
+						mcaStatus.ConfigReferences[i].ConfigReferent.Name = supportedConfig.DefaultConfig.Name
+						mcaStatus.ConfigReferences[i].ConfigReferent.Namespace = supportedConfig.DefaultConfig.Namespace
+					}
 					if mcaStatus.ConfigReferences[i].DesiredConfig == nil {
+						log.Info("DesiredConfig is nil, initializing it")
 						mcaStatus.ConfigReferences[i].DesiredConfig = &addonv1alpha1.ConfigSpecHash{}
 					}
-					// Update DesiredConfig.ConfigReferent
+					// Update DesiredConfig.ConfigReferent only if it changed
 					// This tells addon-framework which config to calculate SpecHash from
-					mcaStatus.ConfigReferences[i].DesiredConfig.ConfigReferent = *supportedConfig.DefaultConfig
+					if mcaStatus.ConfigReferences[i].DesiredConfig.ConfigReferent.Name != supportedConfig.DefaultConfig.Name ||
+						mcaStatus.ConfigReferences[i].DesiredConfig.ConfigReferent.Namespace != supportedConfig.DefaultConfig.Namespace {
+						log.Info("Updating DesiredConfig.ConfigReferent",
+							"oldDesiredConfigReferent", mcaStatus.ConfigReferences[i].DesiredConfig.ConfigReferent.Name+"/"+mcaStatus.ConfigReferences[i].DesiredConfig.ConfigReferent.Namespace,
+							"newDesiredConfigReferent", supportedConfig.DefaultConfig.Name+"/"+supportedConfig.DefaultConfig.Namespace,
+							"existingSpecHash", mcaStatus.ConfigReferences[i].DesiredConfig.SpecHash)
+						mcaStatus.ConfigReferences[i].DesiredConfig.ConfigReferent = *supportedConfig.DefaultConfig
+					}
 					// Note: SpecHash and LastObservedGeneration are managed by addon-framework
 					break
 				}
